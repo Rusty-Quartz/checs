@@ -6,6 +6,7 @@
 // copied, modified, or distributed except according to those terms.
 
 use hecs::*;
+use std::{sync::Arc, thread, time::Duration};
 
 #[test]
 fn random_access() {
@@ -273,26 +274,6 @@ fn dynamic_components() {
 }
 
 #[test]
-#[should_panic(expected = "already borrowed")]
-fn illegal_borrow() {
-    let mut world = World::new();
-    world.spawn(("abc", 123));
-    world.spawn(("def", 456));
-
-    world.query::<(&mut i32, &i32)>().iter();
-}
-
-#[test]
-#[should_panic(expected = "already borrowed")]
-fn illegal_borrow_2() {
-    let mut world = World::new();
-    world.spawn(("abc", 123));
-    world.spawn(("def", 456));
-
-    world.query::<(&mut i32, &mut i32)>().iter();
-}
-
-#[test]
 #[should_panic(expected = "query violates a unique borrow")]
 fn illegal_query_mut_borrow() {
     let mut world = World::new();
@@ -319,15 +300,6 @@ fn shared_borrow() {
     world.spawn(("def", 456));
 
     world.query::<(&i32, &i32)>();
-}
-
-#[test]
-#[should_panic(expected = "already borrowed")]
-fn illegal_random_access() {
-    let mut world = World::new();
-    let e = world.spawn(("abc", 123));
-    let _borrow = world.get_mut::<i32>(e).unwrap();
-    world.get::<i32>(e).unwrap();
 }
 
 #[test]
@@ -557,4 +529,34 @@ fn columnar_access() {
     let b = archetypes.next().unwrap();
     assert_eq!(b.ids(), &[f.id(), g.id()]);
     assert_eq!(*b.get::<i32>().unwrap(), [456, 789]);
+}
+
+#[test]
+fn concurrent_access() {
+    let mut world = World::new();
+    let e_1 = world.spawn(("test".to_owned(), 12_u8));
+    let e_2 = world.spawn(("test also".to_owned(), 13_u8));
+
+    let world = Arc::new(world);
+
+    let j_1 = std::thread::spawn(move || {
+        let mut one = world.query_one::<&mut String>(e_1).unwrap();
+
+        let world_clone = world.clone();
+        let j_2 = std::thread::spawn(move || {
+            let mut two = world_clone.query_one::<&mut String>(e_2).unwrap();
+            let string = two.get().unwrap();
+            string.push('!');
+            assert_eq!(string, "test also!");
+        });
+
+        thread::sleep(Duration::from_secs(3));
+        let string = one.get().unwrap();
+        string.push('!');
+        assert_eq!(string, "test!");
+
+        j_2.join().unwrap();
+    });
+
+    j_1.join().unwrap();
 }

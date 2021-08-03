@@ -123,7 +123,10 @@ unsafe impl<T: Component> Sync for Ref<'_, T> {}
 
 impl<'a, T: Component> Drop for Ref<'a, T> {
     fn drop(&mut self) {
-        self.archetype.release::<T>(self.state);
+        // Safety: we acquire the lock upon construction of this type
+        unsafe {
+            self.archetype.release::<T>(self.state);
+        }
     }
 }
 
@@ -166,7 +169,10 @@ unsafe impl<T: Component> Sync for RefMut<'_, T> {}
 
 impl<'a, T: Component> Drop for RefMut<'a, T> {
     fn drop(&mut self) {
-        self.archetype.release_mut::<T>(self.state);
+        // Safety: we acquire the lock upon construction of this type
+        unsafe {
+            self.archetype.release_mut::<T>(self.state);
+        }
     }
 }
 

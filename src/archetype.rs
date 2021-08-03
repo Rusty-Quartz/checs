@@ -8,17 +8,15 @@
 use crate::alloc::alloc::{alloc, dealloc, Layout};
 use crate::alloc::boxed::Box;
 use crate::alloc::{vec, vec::Vec};
-use core::any::{type_name, TypeId};
+use core::any::TypeId;
 use core::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 use core::{fmt, mem, slice};
-
 use hashbrown::{hash_map::DefaultHashBuilder, HashMap};
-
-use crate::borrow::AtomicBorrow;
 use crate::query::Fetch;
 use crate::{align, Access, Component, Query};
+use parking_lot::{RawRwLock as RwLock, lock_api::RawRwLock};
 
 /// A collection of entities having the same component types
 ///
@@ -117,42 +115,38 @@ impl Archetype {
         let ptr = self.get_base::<T>(state);
         let column = unsafe { slice::from_raw_parts_mut(ptr.as_ptr(), self.len as usize) };
         self.borrow::<T>(state);
-        Some(ColumnRef {
-            archetype: self,
-            column,
-        })
+        // Safety: we just acquired the lock above
+        unsafe {
+            Some(ColumnRef::new(self, column))
+        }
     }
 
     pub(crate) fn borrow<T: Component>(&self, state: usize) {
         let (id, state) = self.state.get_from_index(state);
         assert_eq!(id, &TypeId::of::<T>());
 
-        if !state.borrow.borrow() {
-            panic!("{} already borrowed uniquely", type_name::<T>());
-        }
+        state.lock.lock_shared();
     }
 
     pub(crate) fn borrow_mut<T: Component>(&self, state: usize) {
         let (id, state) = self.state.get_from_index(state);
         assert_eq!(id, &TypeId::of::<T>());
 
-        if !state.borrow.borrow_mut() {
-            panic!("{} already borrowed", type_name::<T>());
-        }
+        state.lock.lock_exclusive();
     }
 
-    pub(crate) fn release<T: Component>(&self, state: usize) {
+    pub(crate) unsafe fn release<T: Component>(&self, state: usize) {
         let (id, state) = self.state.get_from_index(state);
         assert_eq!(id, &TypeId::of::<T>());
 
-        state.borrow.release();
+        state.lock.unlock_shared();
     }
 
-    pub(crate) fn release_mut<T: Component>(&self, state: usize) {
+    pub(crate) unsafe fn release_mut<T: Component>(&self, state: usize) {
         let (id, state) = self.state.get_from_index(state);
         assert_eq!(id, &TypeId::of::<T>());
 
-        state.borrow.release_mut();
+        state.lock.unlock_exclusive();
     }
 
     /// Number of entities in this archetype
@@ -509,14 +503,14 @@ impl<V> OrderedTypeIdMap<V> {
 
 struct TypeState {
     offset: usize,
-    borrow: AtomicBorrow,
+    lock: RwLock,
 }
 
 impl TypeState {
     fn new(offset: usize) -> Self {
         Self {
             offset,
-            borrow: AtomicBorrow::new(),
+            lock: RwLock::INIT,
         }
     }
 }
@@ -591,6 +585,16 @@ pub struct ColumnRef<'a, T: Component> {
     column: &'a [T],
 }
 
+impl<'a, T: Component> ColumnRef<'a, T> {
+    // Safety: the caller must ensure that the archetype is locked shared for type T
+    unsafe fn new(archetype: &'a Archetype, column: &'a [T]) -> Self {
+        Self {
+            archetype,
+            column
+        }
+    }
+}
+
 impl<T: Component> Deref for ColumnRef<'_, T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
@@ -601,7 +605,10 @@ impl<T: Component> Deref for ColumnRef<'_, T> {
 impl<T: Component> Drop for ColumnRef<'_, T> {
     fn drop(&mut self) {
         let state = self.archetype.get_state::<T>().unwrap();
-        self.archetype.release::<T>(state);
+        // Safety: safe by the safety guarantees of the constructor of this type
+        unsafe {
+            self.archetype.release::<T>(state);
+        }
     }
 }
 

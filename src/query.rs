@@ -49,7 +49,7 @@ pub unsafe trait Fetch<'a>: Sized {
     /// Construct a `Fetch` for `archetype` based on the associated state
     fn execute(archetype: &'a Archetype, state: Self::State) -> Self;
     /// Release dynamic borrows acquired by `borrow`
-    fn release(archetype: &Archetype, state: Self::State);
+    unsafe fn release(archetype: &Archetype, state: Self::State);
 
     /// Invoke `f` for every component type that may be borrowed and whether the borrow is unique
     fn for_each_borrow(f: impl FnMut(TypeId, bool));
@@ -108,7 +108,7 @@ unsafe impl<'a, T: Component> Fetch<'a> for FetchRead<T> {
     fn execute(archetype: &'a Archetype, state: Self::State) -> Self {
         Self(archetype.get_base(state))
     }
-    fn release(archetype: &Archetype, state: Self::State) {
+    unsafe fn release(archetype: &Archetype, state: Self::State) {
         archetype.release::<T>(state);
     }
 
@@ -155,7 +155,7 @@ unsafe impl<'a, T: Component> Fetch<'a> for FetchWrite<T> {
     fn execute(archetype: &'a Archetype, state: Self::State) -> Self {
         Self(archetype.get_base::<T>(state))
     }
-    fn release(archetype: &Archetype, state: Self::State) {
+    unsafe fn release(archetype: &Archetype, state: Self::State) {
         archetype.release_mut::<T>(state);
     }
 
@@ -199,7 +199,7 @@ unsafe impl<'a, T: Fetch<'a>> Fetch<'a> for TryFetch<T> {
     fn execute(archetype: &'a Archetype, state: Self::State) -> Self {
         Self(state.map(|state| T::execute(archetype, state)))
     }
-    fn release(archetype: &Archetype, state: Self::State) {
+    unsafe fn release(archetype: &Archetype, state: Self::State) {
         if let Some(state) = state {
             T::release(archetype, state);
         }
@@ -269,7 +269,7 @@ unsafe impl<'a, T: Component, F: Fetch<'a>> Fetch<'a> for FetchWithout<T, F> {
     fn execute(archetype: &'a Archetype, state: Self::State) -> Self {
         Self(F::execute(archetype, state), PhantomData)
     }
-    fn release(archetype: &Archetype, state: Self::State) {
+    unsafe fn release(archetype: &Archetype, state: Self::State) {
         F::release(archetype, state)
     }
 
@@ -339,7 +339,7 @@ unsafe impl<'a, T: Component, F: Fetch<'a>> Fetch<'a> for FetchWith<T, F> {
     fn execute(archetype: &'a Archetype, state: Self::State) -> Self {
         Self(F::execute(archetype, state), PhantomData)
     }
-    fn release(archetype: &Archetype, state: Self::State) {
+    unsafe fn release(archetype: &Archetype, state: Self::State) {
         F::release(archetype, state)
     }
 
@@ -473,7 +473,11 @@ impl<'w, Q: Query> Drop for QueryBorrow<'w, Q> {
         if self.borrowed {
             for x in self.archetypes {
                 if let Some(state) = Q::Fetch::prepare(x) {
-                    Q::Fetch::release(x, state);
+                    // Safety: the checks above ensure that we only release the lock after we have
+                    // acquired it
+                    unsafe {
+                        Q::Fetch::release(x, state);
+                    }
                 }
             }
         }
@@ -788,7 +792,7 @@ macro_rules! tuple_impl {
                 ($($name::execute(archetype, $name),)*)
             }
             #[allow(unused_variables, non_snake_case)]
-            fn release(archetype: &Archetype, state: Self::State) {
+            unsafe fn release(archetype: &Archetype, state: Self::State) {
                 let ($($name,)*) = state;
                 $($name::release(archetype, $name);)*
             }
@@ -923,7 +927,10 @@ impl<'q, Q: Query> PreparedQueryBorrow<'q, Q> {
 impl<Q: Query> Drop for PreparedQueryBorrow<'_, Q> {
     fn drop(&mut self) {
         for (idx, state) in self.state {
-            Q::Fetch::release(&self.archetypes[*idx], *state);
+            // Safety: we acquire these locks upon construction of this type
+            unsafe {
+                Q::Fetch::release(&self.archetypes[*idx], *state);
+            }
         }
     }
 }

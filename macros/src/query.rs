@@ -157,7 +157,7 @@ pub fn derive(input: DeriveInput) -> Result<TokenStream2> {
             }
 
             #[allow(unused_variables)]
-            fn release(archetype: &::hecs::Archetype, state: Self::State) {
+            unsafe fn release(archetype: &::hecs::Archetype, state: Self::State) {
                 #(#fetches::release(archetype, state.#fields);)*
             }
 

@@ -58,15 +58,12 @@ macro_rules! smaller_tuples_too {
 
 mod archetype;
 mod batch;
-mod borrow;
 mod bundle;
 mod entities;
 mod entity_builder;
 mod entity_ref;
 mod query;
 mod query_one;
-#[cfg(any(feature = "row-serialize", feature = "column-serialize"))]
-pub mod serialize;
 mod world;
 
 pub use archetype::Archetype;

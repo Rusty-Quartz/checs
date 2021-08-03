@@ -78,7 +78,11 @@ impl<Q: Query> Drop for QueryOne<'_, Q> {
     fn drop(&mut self) {
         if self.borrowed {
             let state = Q::Fetch::prepare(self.archetype).unwrap();
-            Q::Fetch::release(self.archetype, state);
+
+            // Safety: self.borrowed is set to true in `get` when we acquire the lock
+            unsafe {
+                Q::Fetch::release(self.archetype, state);
+            }
         }
     }
 }
